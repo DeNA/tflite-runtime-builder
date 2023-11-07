@@ -1,0 +1,45 @@
+name: Build TensorFlow Lite runtime
+
+on:
+  push:
+    # Sequence of patterns matched against refs/tags
+    tags:
+    - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    env:
+      in_path: "bin/tensorflow/lite/c/libtensorflowlite_c.dylib"
+      out_path: "libtensorflowlite_c.dylib"
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          repository: tensorflow/tensorflow
+          ref: ${{ github.ref_name }}
+          submodules: true
+          github-server-url: https://github.com
+
+      - uses: actions/setup-node@v3    
+        with:
+          node-version: 18          
+
+      - name: Install dependencies
+        run: npm install -g @bazel/bazelisk
+
+      - name: Build
+        run: |
+          bazel build --config=macos --cpu=darwin -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
+          bazel build --config=macos_arm64 --cpu=darwin_arm64 -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
+          lipo -create -output ${{ env.out_path }} bazel-out/darwin-opt/${{ env.in_path }} bazel-out/darwin_arm64-opt/${{ env.in_path }}
+
+      - name: Archive
+        uses: actions/upload-artifact@v3
+        with:
+          name: tensorflowlite_c-macos-universal
+          path: ${{ env.out_path }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.out_path }}
