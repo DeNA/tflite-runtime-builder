@@ -7,45 +7,96 @@ on:
     - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
-    env:
-      in_path: "bin/tensorflow/lite/c/libtensorflowlite_c.dylib"
-      out_path: "libtensorflowlite_c.dylib"
+  build-linux:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
         with:
           repository: tensorflow/tensorflow
           ref: ${{ github.ref_name }}
-          submodules: true
+          submodules: recursive
           github-server-url: https://github.com
-
-      - uses: actions/setup-node@v3    
-        with:
-          node-version: 18          
-
+      - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-
       - name: Install dependencies
         run: |
-          npm install -g @bazel/bazelisk
           pip3 install numpy
+      - name: Build runtime
+        run: |
+          bazel build -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
+      - uses: actions/upload-artifact@v3
+        with:
+          name: bin-linux
+          path: |
+             bazel-bin/tensorflow/lite/c/*.so
 
-      - name: Build
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          repository: tensorflow/tensorflow
+          ref: ${{ github.ref_name }}
+          submodules: recursive
+          github-server-url: https://github.com
+      - uses: bazelbuild/setup-bazelisk@v2
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip3 install numpy
+      - name: Build runtime
         run: |
           bazel build --config=macos --cpu=darwin -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
+          mkdir -p x86_64; cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.dylib x86_64
           bazel build --config=macos_arm64 --cpu=darwin_arm64 -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          lipo -create -output ${{ env.out_path }} bazel-out/darwin-opt/${{ env.in_path }} bazel-out/darwin_arm64-opt/${{ env.in_path }}
-
-      - name: Archive
-        uses: actions/upload-artifact@v3
+          mkdir -p arm64; cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.dylib arm64
+          lipo -create -output libtensorflowlite_c.dylib x86_64/libtensorflowlite_c.dylib arm64/libtensorflowlite_c.dylib
+      - uses: actions/upload-artifact@v3
         with:
-          name: tensorflowlite_c-macos-universal
-          path: ${{ env.out_path }}
+          name: bin-macos
+          path: |
+            libtensorflowlite_c.dylib
 
-      - name: Release
-        uses: softprops/action-gh-release@v1
+  build-windows:
+    # TODO(soon): Using windows-2019 as build is broken on windows-latest runner due to another
+    # bazel bug https://github.com/bazelbuild/bazel/issues/18592  
+    runs-on: windows-2019
+    steps:
+      - uses: actions/checkout@v3
         with:
-          files: ${{ env.out_path }}
+          repository: tensorflow/tensorflow
+          ref: ${{ github.ref_name }}
+          submodules: recursive
+          github-server-url: https://github.com
+      - uses: bazelbuild/setup-bazelisk@v2
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip3 install numpy
+      - name: Build runtime
+        shell: bash
+        run: |
+          bazel build -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
+      - uses: actions/upload-artifact@v3
+        with:
+          name: bin-windows
+          path: |
+            bazel-bin/tensorflow/lite/c/*.dll
+
+  release:
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:  
+      - uses: actions/download-artifact@v3
+        with:
+          path: '.'      
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: '**/*'
