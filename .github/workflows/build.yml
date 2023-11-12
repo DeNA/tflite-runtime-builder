@@ -7,15 +7,21 @@ on:
     - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
 env:
-  PYTHON_VERSION: '3.10.11'
+  TF_PYTHON_VERSION: '3.10'
 
 jobs:
   build-android:
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - config: android_arm64
+          - config: android_arm
+          - config: android_fat_aar
     env:
       ANDROID_SDK_API_LEVEL: 30
       ANDROID_NDK_API_LEVEL: 26
-      ANDROID_BUILD_TOOLS_VERSION: 30.0.3
+      ANDROID_BUILD_TOOLS_VERSION: '31.0.0'
     steps:
       - uses: actions/checkout@v3
         with:
@@ -26,35 +32,64 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           pip install numpy
-          SDKMANAGER=${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager
-          echo "y" | $SDKMANAGER "ndk;21.4.7075529"
-      - name: Build runtime
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r21b
+          add-to-path: true
+      - name: Build shared libraries
+        if: ${{ matrix.config != 'android_fat_aar' }}
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          mkdir -p Android/arm64-v8a
           export ANDROID_SDK_HOME=$ANDROID_HOME
-          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/21.4.7075529
+
+          # Main
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false tensorflow/lite/c:tensorflowlite_c
+          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.so .
           
-          bazel build -c opt --fat_apk_cpu=arm64-v8a --cxxopt=--std=c++17 --host_crosstool_top=@bazel_tools//tools/cpp:toolchain --define=android_dexmerger_tool=d8_dexmerger --define=android_incremental_dexing_tool=d8_dexbuilder //tensorflow/lite/java:tensorflow-lite
-          cp -f bazel-bin/tensorflow/lite/java/tensorflow-lite.aar Android
+          # GPU Delegate
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_delegate.so
+          cp -f bazel-bin/tensorflow/lite/delegates/gpu/libtensorflowlite_gpu_delegate.so .
+
+          # GL Delegate
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_gl.so
+          cp -f bazel-bin/tensorflow/lite/delegates/gpu/libtensorflowlite_gpu_gl.so .
+
+          # NNAPI Delegate
+          # bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false tensorflow/lite/delegates/nnapi:nnapi_delegate
+          # cp -f bazel-bin/tensorflow/lite/delegates/nnapi/libnnapi_delegate.so .
+      - name: Build AAR
+        if: ${{ matrix.config == 'android_fat_aar' }}
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          export ANDROID_SDK_HOME=$ANDROID_HOME
+
+          # Main
+          bazel build -c opt --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86_64 --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --host_crosstool_top=@bazel_tools//tools/cpp:toolchain --define=android_dexmerger_tool=d8_dexmerger --define=android_incremental_dexing_tool=d8_dexbuilder tensorflow/lite/java:tensorflow-lite
+          cp -f bazel-bin/tensorflow/lite/java/tensorflow-lite.aar .
           
-          bazel build -c opt --fat_apk_cpu=arm64-v8a --cxxopt=--std=c++17 //tensorflow/lite/java:tensorflow-lite-gpu
-          cp -f bazel-bin/tensorflow/lite/java/tensorflow-lite-gpu.aar Android
-          
-          bazel build -c opt --config=android_arm64 --cxxopt=--std=c++17 --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always //tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_gl.so
-          cp -f bazel-bin/tensorflow/lite/delegates/gpu/libtensorflowlite_gpu_gl.so Android/arm64-v8a
-          
-          tar cvjf tflite-runtime-${{ github.ref_name }}-android.bz2 Android
+          # GPU Delegate
+          bazel build -c opt --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86_64 --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --host_crosstool_top=@bazel_tools//tools/cpp:toolchain --define=android_dexmerger_tool=d8_dexmerger --define=android_incremental_dexing_tool=d8_dexbuilder tensorflow/lite/java:tensorflow-lite-gpu
+          cp -f bazel-bin/tensorflow/lite/java/tensorflow-lite-gpu.aar .
       - uses: actions/upload-artifact@v3
         with:
-          name: bin-android
-          path: '*.bz2'
+          name: tflite-runtime-${{ matrix.config }}
+          path: |
+            *.so
+            *.aar
 
   build-ios:
     runs-on: macos-12
+    strategy:
+      matrix:
+        include:
+          - config: ios_arm64
     steps:
       - uses: actions/checkout@v3
         with:
@@ -65,7 +100,7 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           pip install numpy
@@ -74,25 +109,31 @@ jobs:
           mv tensorflow/lite/ios/BUILD.apple tensorflow/lite/ios/BUILD
           mv tensorflow/lite/objc/BUILD.apple tensorflow/lite/objc/BUILD
           mv tensorflow/lite/swift/BUILD.apple tensorflow/lite/swift/BUILD
-          mkdir -p iOS
           
-          bazel build -c opt --config=ios_arm64 --cxxopt=--std=c++17 //tensorflow/lite/ios:TensorFlowLiteC_framework
-          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteC_framework.zip -d iOS
+          # Main
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 tensorflow/lite/ios:TensorFlowLiteC_framework
+          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteC_framework.zip
+
+          # Metal Delegate
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 tensorflow/lite/ios:TensorFlowLiteCMetal_framework
+          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteCMetal_framework.zip
           
-          bazel build -c opt --config=ios_arm64 --cxxopt=--std=c++17 //tensorflow/lite/ios:TensorFlowLiteCMetal_framework
-          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteCMetal_framework.zip -d iOS
-          
-          bazel build -c opt --config=ios_arm64 --cxxopt=--std=c++17 //tensorflow/lite/ios:TensorFlowLiteCCoreML_framework
-          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteCCoreML_framework.zip -d iOS
-          
-          tar cvjf tflite-runtime-${{ github.ref_name }}-ios.bz2 iOS
+          # CoreML Delegate
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 tensorflow/lite/ios:TensorFlowLiteCCoreML_framework
+          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteCCoreML_framework.zip
       - uses: actions/upload-artifact@v3
         with:
-          name: bin-ios
-          path: '*.bz2'
+          name: tflite-runtime-${{ matrix.config }}
+          path: |
+            *.framework
 
   build-linux:
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - config: linux
+          - config: elinux_aarch64
     steps:
       - uses: actions/checkout@v3
         with:
@@ -103,27 +144,30 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
+          sudo apt-get update && sudo apt-get install libegl1-mesa-dev
           pip install numpy
       - name: Build runtime
         run: |
-          mkdir -p Linux Linux/x86_64 Linux/arm64
-          
-          bazel build -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.so Linux/x86_64
-          bazel build --config=elinux_aarch64 -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.so Linux/arm64
-          
-          tar cvjf tflite-runtime-${{ github.ref_name }}-linux.bz2 Linux
+          bazel build --config=${{ matrix.config }} -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
+          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.so .
       - uses: actions/upload-artifact@v3
         with:
-          name: bin-linux
-          path: '*.bz2'
+          name: tflite-runtime-${{ matrix.config }}
+          path: |
+            *.so
 
   build-macos:
     runs-on: macos-12
+    strategy:
+      matrix:
+        include:
+          - config: macos
+            cpu: x86_64
+          - config: macos_arm64
+            cpu: arm64
     steps:
       - uses: actions/checkout@v3
         with:
@@ -134,35 +178,43 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           pip install numpy
       - name: Build runtime
         run: |
-          mkdir -p macOS x86_64 arm64
-          
-          bazel build --config=macos --cpu=darwin -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.dylib x86_64
-          bazel build --config=macos_arm64 --cpu=darwin_arm64 -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.dylib arm64
-          lipo -create -output macOS/libtensorflowlite_c.dylib x86_64/libtensorflowlite_c.dylib arm64/libtensorflowlite_c.dylib
-          
-          bazel build --config=macos --cpu=darwin_x86_64 --macos_cpus=x86_64 --apple_platform_type=macos --cxxopt=--std=c++17 -c opt --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=default --linkopt -s --strip always //tensorflow/lite/delegates/gpu:tensorflow_lite_gpu_dylib
-          cp -f bazel-bin/tensorflow/lite/delegates/gpu/tensorflow_lite_gpu_dylib.dylib x86_64
-          bazel build --config=macos_arm64 --cpu=darwin_arm64  --macos_cpus=arm64 --apple_platform_type=macos --cxxopt=--std=c++17 -c opt --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=default --linkopt -s --strip always //tensorflow/lite/delegates/gpu:tensorflow_lite_gpu_dylib
-          cp -f bazel-bin/tensorflow/lite/delegates/gpu/tensorflow_lite_gpu_dylib.dylib arm64
-          lipo -create -output macOS/libtensorflowlite_metal_delegate.dylib x86_64/tensorflow_lite_gpu_dylib.dylib arm64/tensorflow_lite_gpu_dylib.dylib
-          
-          tar cvjf tflite-runtime-${{ github.ref_name }}-macos.bz2 macOS
+          # Main
+          bazel build --config=${{ matrix.config }} --macos_cpus=${{ matrix.cpu }} --cxxopt=--std=c++17 -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
+          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.dylib .
+
+          # Metal Delegate
+          bazel build --config=${{ matrix.config }} --macos_cpus=${{ matrix.cpu }} --cxxopt=--std=c++17 -c opt --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=default --linkopt -s --strip always tensorflow/lite/delegates/gpu:tensorflow_lite_gpu_dylib
+          cp -f bazel-bin/tensorflow/lite/delegates/gpu/tensorflow_lite_gpu_dylib.dylib ./libtensorflowlite_metal_delegate.dylib
       - uses: actions/upload-artifact@v3
         with:
-          name: bin-macos
-          path: '*.bz2'
+          name: tflite-runtime-macos_${{ matrix.cpu }}
+          path: |
+            *.dylib
+
+  build-macos-universal:
+    needs: [build-macos]
+    runs-on: macos-12
+    steps:  
+      - uses: actions/download-artifact@v3
+      - name: Build universal binary
+        run: |
+          lipo -create -output libtensorflowlite_c.dylib tflite-runtime-macos_x86_64/libtensorflowlite_c.dylib tflite-runtime-macos_arm64/libtensorflowlite_c.dylib
+          lipo -create -output libtensorflowlite_metal_delegate.dylib tflite-runtime-macos_x86_64/libtensorflowlite_metal_delegate.dylib tflite-runtime-macos_arm64/libtensorflowlite_metal_delegate.dylib
+      - uses: actions/upload-artifact@v3
+        with:
+          name: tflite-runtime-macos
+          path: |
+            *.dylib
 
   build-windows:
-    # TODO(soon): Using windows-2019 as build is broken on windows-latest runner due to another
-    # bazel bug https://github.com/bazelbuild/bazel/issues/18592  
+    # Using windows-2019 as build is broken on windows-latest runner due to another
+    # See: https://github.com/bazelbuild/bazel/issues/18592  
     runs-on: windows-2019
     steps:
       - uses: actions/checkout@v3
@@ -172,29 +224,32 @@ jobs:
           submodules: recursive
           github-server-url: https://github.com
       - uses: bazelbuild/setup-bazelisk@v2
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
-          pip3 install numpy
+          pip install numpy
       - name: Build runtime
         shell: bash
         run: |
-          mkdir -p Windows
-
+          # Main
           bazel build -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/tensorflowlite_c.dll Windows
-          
-          tar cvjf tflite-runtime-${{ github.ref_name }}-windows.bz2 Windows
+          cp -f bazel-bin/tensorflow/lite/c/tensorflowlite_c.dll .
       - uses: actions/upload-artifact@v3
         with:
-          name: bin-windows
-          path: '*.bz2'
+          name: tflite-runtime-windows_x86_64
+          path: |
+            *.dll
 
   release:
-    needs: [build-android, build-ios, build-linux, build-macos, build-windows]
+    needs: [build-android, build-ios, build-linux, build-macos-universal, build-windows]
     runs-on: ubuntu-latest
     permissions: write-all
     steps:  
       - uses: actions/download-artifact@v3
+      - name: Compress artifact
+        run: zip -r tflite-runtime.zip .
       - uses: softprops/action-gh-release@v1
         with:
-          files: '**/*'
+          files: tflite-runtime.zip
