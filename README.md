@@ -1,4 +1,5 @@
 # tflite-runtime-builder
+
 Build [TensorFlow Lite](https://www.tensorflow.org/lite) runtime with GitHub Actions
 
 ## Supported Platforms
@@ -17,3 +18,11 @@ You can download the runtime binaries `tflite-runtime.zip` from [Releases](https
 | macOS    | .dylib | arm64       | `tflite-runtime-macos_arm64`        |
 | macOS    | .dylib | x86_64      | `tflite-runtime-macos_x86_64`       |
 | Windows  | .dll | x86_64      | `tflite-runtime-windows_x86_64`     |
+
+## License
+
+MIT License
+
+## How to contribute
+
+Open an issue or create a pull request.
