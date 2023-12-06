@@ -17,6 +17,7 @@ jobs:
         include:
           - config: android_arm64
           - config: android_arm
+          - config: android_x86_64
           - config: android_fat_aar
     env:
       ANDROID_SDK_API_LEVEL: 30
@@ -90,6 +91,7 @@ jobs:
       matrix:
         include:
           - config: ios_arm64
+          - config: ios_x86_64
     steps:
       - uses: actions/checkout@v3
         with:
