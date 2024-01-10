@@ -12,8 +12,9 @@ You can download the archived files of the runtime binaries from [Releases](http
 | Android  | .so    | arm64-v8a   | `tflite-runtime-android-arm64-*.tgz`  |
 | Android  | .so    | x86_64      | `tflite-runtime-android_x86_64-*.tgz` |
 | Android  | .aar   | armeabi-v7, aarm64-v8a, x86_64 | `tflite-runtime-android-fat-aar-*.tgz` |
-| iOS      | .framework  | arm64  | `tflite-runtime-ios-arm64-*.zip`      |
-| iOS      | .framework  | x86_64 | `tflite-runtime-ios-x86_64-*.zip`     |
+| iOS      | .framework | arm64   | `tflite-runtime-ios-arm64-*.zip`      |
+| iOS Sim  | .framework | arm64   | `tflite-runtime-ios-sim-arm64-*.zip`  |
+| iOS Sim  | .framework | x86_64  | `tflite-runtime-ios-sim-x86_64-*.zip` |
 | Linux    | .so    | AArch64     | `tflite-runtime-linux-arm64-*.tgz`    |
 | Linux    | .so    | x86_64      | `tflite-runtime-linux-x86_64-*.tgz`   |
 | macOS    | .dylib | universal (arm64, x86_64) | `tflite-runtime-osx-universal2-*.tgz` |

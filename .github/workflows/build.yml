@@ -1,4 +1,4 @@
-name: Build TensorFlow Lite runtime
+name: Build TFLite runtime
 
 on:
   release:
@@ -6,25 +6,31 @@ on:
       - published
   workflow_dispatch:
     inputs:
-      version:
-        description: "Semantic version (e.g., 2.15.0)"
+      release:
+        description: "If true, release the artifact"
+        type: boolean
         required: true
       repository:
         description: "Name of a target repository"
         default: 'tensorflow/tensorflow'
+        required: false
+      xnn_arm_options:
+        description: "XNNPack ARM options"
+        default: '--define=xnn_enable_arm_i8mm=false --define=xnn_enable_arm_bf16=false'
+        required: false
+      xnn_avx_options:
+        description: "XNNPack AVX options"
+        default: '--define=xnn_enable_avx512amx=false --define=xnn_enable_avxvnniint8=false --define=xnn_enable_avxvnni=false --define=xnn_enable_avx512fp16=false'
         required: false
 
 permissions:
   contents: write
 
 env:
-  PYTHON_VER: '3.10'
-  VERSION:
-    |- # Enter release tag name or version in workflow_dispatch. DEBUG if not specified
-    ${{ github.event.release.tag_name || github.event.inputs.version || 'DEBUG' }}
+  VERSION: ${{ github.ref_name }}
   REPOSITORY:
     ${{ github.event.inputs.repository || 'tensorflow/tensorflow' }}
-  
+
 jobs:
   build-android:
     runs-on: ubuntu-22.04
@@ -34,30 +40,30 @@ jobs:
         include:
           - config: android_arm64
             artifact_name: tflite-runtime-android-arm64
-          - config: android_arm
-            artifact_name: tflite-runtime-android-arm
-          - config: android_x86_64
-            artifact_name: tflite-runtime-android-x86_64
-          - config: android_fat_aar
-            artifact_name: tflite-runtime-android-fat-aar
     env:
-      ANDROID_SDK_API_LEVEL: 30
+      ANDROID_SDK_API_LEVEL: 31
       ANDROID_NDK_API_LEVEL: 26
       ANDROID_BUILD_TOOLS_VERSION: '31.0.0'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
+          ref: "af1d5bc4fbb66d9e6cc1cf89503014a99233583b"
           submodules: recursive
           github-server-url: https://github.com
-      - uses: bazelbuild/setup-bazelisk@v2
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
         with:
-          python-version: ${{ env.PYTHON_VER }}
+          path: builder
+      - name: Patch TensorFlow
+        run: |
+          patch -d . -p1 < builder/gpudelegate.diff
+      - uses: bazel-contrib/setup-bazel@0.15.0
       - name: Install dependencies
         run: |
-          pip install numpy
+          pip3 install numpy
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y mesa-common-dev libegl1-mesa-dev libgles2-mesa-dev
       - uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
@@ -72,255 +78,26 @@ jobs:
           export ANDROID_SDK_HOME=$ANDROID_HOME
 
           # Main
-          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false tensorflow/lite/c:tensorflowlite_c
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 ${{ inputs.xnn_arm_options }} ${{ inputs.xnn_avx_options }} tensorflow/lite/c:tensorflowlite_c
           cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.so artifact
           
           # GPU Delegate
-          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_delegate.so
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 ${{ inputs.xnn_arm_options }} ${{ inputs.xnn_avx_options }} --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_delegate.so
           cp -f bazel-bin/tensorflow/lite/delegates/gpu/libtensorflowlite_gpu_delegate.so artifact
 
           # GL Delegate
-          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_gl.so
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 ${{ inputs.xnn_arm_options }} ${{ inputs.xnn_avx_options }} --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_gl.so
           cp -f bazel-bin/tensorflow/lite/delegates/gpu/libtensorflowlite_gpu_gl.so artifact
 
           # NNAPI Delegate
-          # bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false tensorflow/lite/delegates/nnapi:nnapi_delegate
+          # bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 ${{ inputs.xnn_arm_options }} ${{ inputs.xnn_avx_options }} tensorflow/lite/delegates/nnapi:nnapi_delegate
           # cp -f bazel-bin/tensorflow/lite/delegates/nnapi/libnnapi_delegate.so artifact
-      - name: Build AAR
-        if: ${{ matrix.config == 'android_fat_aar' }}
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          mkdir -p artifact
-          export ANDROID_SDK_HOME=$ANDROID_HOME
-
-          # Main
-          bazel build -c opt --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86_64 --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --host_crosstool_top=@bazel_tools//tools/cpp:toolchain --define=android_dexmerger_tool=d8_dexmerger --define=android_incremental_dexing_tool=d8_dexbuilder tensorflow/lite/java:tensorflow-lite
-          cp -f bazel-bin/tensorflow/lite/java/tensorflow-lite.aar artifact
-          
-          # GPU Delegate
-          bazel build -c opt --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86_64 --cxxopt=--std=c++17 --define=xnn_enable_arm_fp16=false --define=xnn_enable_arm_i8mm=false --host_crosstool_top=@bazel_tools//tools/cpp:toolchain --define=android_dexmerger_tool=d8_dexmerger --define=android_incremental_dexing_tool=d8_dexbuilder tensorflow/lite/java:tensorflow-lite-gpu
-          cp -f bazel-bin/tensorflow/lite/java/tensorflow-lite-gpu.aar artifact
       - name: Compress artifact
         run: |
           mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
           tar czf "${{ matrix.artifact_name }}-${{ env.VERSION }}.tgz" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-      - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
+      - uses: softprops/action-gh-release@v2
+        if: ${{ inputs.release }}
         with:
           files: "*.tgz"
-          tag_name: ${{ env.VERSION }}
-
-  build-ios:
-    runs-on: macos-12
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: ios_arm64
-            artifact_name: tflite-runtime-ios-arm64
-          - config: ios_x86_64
-            artifact_name: tflite-runtime-ios-x86_64
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
-          submodules: recursive
-          github-server-url: https://github.com
-      - uses: bazelbuild/setup-bazelisk@v2
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VER }}
-      - name: Install dependencies
-        run: |
-          pip install numpy
-      - name: Build runtime
-        run: |
-          mv tensorflow/lite/ios/BUILD.apple tensorflow/lite/ios/BUILD
-          mv tensorflow/lite/objc/BUILD.apple tensorflow/lite/objc/BUILD
-          mv tensorflow/lite/swift/BUILD.apple tensorflow/lite/swift/BUILD
-
-          mkdir -p artifact
-          
-          # Main
-          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 tensorflow/lite/ios:TensorFlowLiteC_framework
-          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteC_framework.zip -d artifact
-
-          # Metal Delegate
-          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 tensorflow/lite/ios:TensorFlowLiteCMetal_framework
-          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteCMetal_framework.zip -d artifact
-          
-          # CoreML Delegate
-          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 tensorflow/lite/ios:TensorFlowLiteCCoreML_framework
-          unzip -o bazel-bin/tensorflow/lite/ios/TensorFlowLiteCCoreML_framework.zip -d artifact
-
-          mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-          7z a "${{ matrix.artifact_name }}-${{ env.VERSION }}.zip" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-      - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
-        with:
-          files: "*.zip"
-          tag_name: ${{ env.VERSION }}
-
-  build-linux:
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: linux
-            artifact_name: tflite-runtime-linux-x86_64
-          - config: elinux_aarch64
-            artifact_name: tflite-runtime-linux-arm64
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
-          submodules: recursive
-          github-server-url: https://github.com
-      - uses: bazelbuild/setup-bazelisk@v2
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VER }}
-      - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install libegl1-mesa-dev
-          pip install numpy
-      - name: Build runtime
-        run: |
-          mkdir -p artifact
-
-          bazel build --config=${{ matrix.config }} -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.so artifact
-
-          mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-          tar cfz "${{ matrix.artifact_name }}-${{ env.VERSION }}.tgz" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-      - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
-        with:
-          files: "*.tgz"
-          tag_name: ${{ env.VERSION }}
-
-  build-macos:
-    runs-on: macos-12
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: macos
-            cpu: x86_64
-            artifact_name: tflite-runtime-osx-x86_64
-          - config: macos_arm64
-            cpu: arm64
-            artifact_name: tflite-runtime-osx-arm64
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
-          submodules: recursive
-          github-server-url: https://github.com
-      - uses: bazelbuild/setup-bazelisk@v2
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VER }}
-      - name: Install dependencies
-        run: |
-          pip install numpy
-      - name: Build runtime
-        run: |
-          mkdir -p artifact
-
-          # Main
-          bazel build --config=${{ matrix.config }} --macos_cpus=${{ matrix.cpu }} --cxxopt=--std=c++17 -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.dylib artifact
-
-          # Metal Delegate
-          bazel build --config=${{ matrix.config }} --macos_cpus=${{ matrix.cpu }} --cxxopt=--std=c++17 -c opt --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=default --linkopt -s --strip always tensorflow/lite/delegates/gpu:tensorflow_lite_gpu_dylib
-          cp -f bazel-bin/tensorflow/lite/delegates/gpu/tensorflow_lite_gpu_dylib.dylib artifact/libtensorflowlite_metal_delegate.dylib
-
-          mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-          tar cfz "${{ matrix.artifact_name }}-${{ env.VERSION }}.tgz" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}-${{ env.VERSION }}
-          path: ${{ matrix.artifact_name }}-${{ env.VERSION }}
-          retention-days: 1
-      - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
-        with:
-          files: "*.tgz"
-          tag_name: ${{ env.VERSION }}
-
-  build-macos-universal:
-    needs: [build-macos]
-    runs-on: macos-12
-    steps:  
-      - uses: actions/download-artifact@v4
-      - name: Build universal binary
-        run: |
-          mkdir -p artifact
-          lipo -create -output artifact/libtensorflowlite_c.dylib "tflite-runtime-osx-x86_64-${{ env.VERSION }}/libtensorflowlite_c.dylib" "tflite-runtime-osx-arm64-${{ env.VERSION }}/libtensorflowlite_c.dylib"
-          lipo -create -output artifact/libtensorflowlite_metal_delegate.dylib "tflite-runtime-osx-x86_64-${{ env.VERSION }}/libtensorflowlite_metal_delegate.dylib" "tflite-runtime-osx-arm64-${{ env.VERSION }}/libtensorflowlite_metal_delegate.dylib"
-          mv artifact/ "tflite-runtime-osx-universal2-${{ env.VERSION }}"
-          tar cfz "tflite-runtime-osx-universal2-${{ env.VERSION }}.tgz" "tflite-runtime-osx-universal2-${{ env.VERSION }}"
-      - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
-        with:
-          files: "*.tgz"
-          tag_name: ${{ env.VERSION }}
-
-  build-windows:
-    # Using windows-2019 as build is broken on windows-latest runner due to another
-    # See: https://github.com/bazelbuild/bazel/issues/18592  
-    runs-on: windows-2019
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: windows_x86_64
-            cpu: x86_64
-            artifact_name: tflite-runtime-win-x86_64
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
-          submodules: recursive
-          github-server-url: https://github.com
-      - uses: bazelbuild/setup-bazelisk@v2
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VER }}
-      - name: Install dependencies
-        run: |
-          pip install numpy
-      - name: Build runtime
-        shell: bash
-        run: |
-          mkdir -p artifact
-
-          # Main
-          bazel build -c opt --define tflite_with_xnnpack=true tensorflow/lite/c:tensorflowlite_c
-          cp -f bazel-bin/tensorflow/lite/c/tensorflowlite_c.dll artifact
-
-          mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-          7z a "${{ matrix.artifact_name }}-${{ env.VERSION }}.zip" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
-      - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
-        with:
-          files: "*.zip"
-          tag_name: ${{ env.VERSION }}
-
-  release:
-    needs: [build-android, build-ios, build-linux, build-macos-universal, build-windows]
-    runs-on: ubuntu-latest
-    steps:  
-      - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
-        with:
-          name: TFLite Runtime v${{ env.VERSION }}
-          tag_name: ${{ env.VERSION }}
-          target_commitish: ${{ github.sha }}
+          draft: true
