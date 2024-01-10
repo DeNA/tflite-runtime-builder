@@ -18,10 +18,10 @@ permissions:
   contents: write
 
 env:
-  PYTHON_VER: '3.10'
+  TF_PYTHON_VERSION: '3.10'
   VERSION:
-    |- # Enter release tag name or version in workflow_dispatch. DEBUG if not specified
-    ${{ github.event.release.tag_name || github.event.inputs.version || 'DEBUG' }}
+    |- # Enter release tag name or version in workflow_dispatch. Recent version if not specified
+    ${{ github.event.release.tag_name || github.event.inputs.version || '2.15.0' }}
   REPOSITORY:
     ${{ github.event.inputs.repository || 'tensorflow/tensorflow' }}
   
@@ -41,7 +41,7 @@ jobs:
           - config: android_fat_aar
             artifact_name: tflite-runtime-android-fat-aar
     env:
-      ANDROID_SDK_API_LEVEL: 30
+      ANDROID_SDK_API_LEVEL: 31
       ANDROID_NDK_API_LEVEL: 26
       ANDROID_BUILD_TOOLS_VERSION: '31.0.0'
     steps:
@@ -54,7 +54,7 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VER }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           pip install numpy
@@ -106,7 +106,6 @@ jobs:
           mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
           tar czf "${{ matrix.artifact_name }}-${{ env.VERSION }}.tgz" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
       - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
         with:
           files: "*.tgz"
           tag_name: ${{ env.VERSION }}
@@ -119,8 +118,10 @@ jobs:
         include:
           - config: ios_arm64
             artifact_name: tflite-runtime-ios-arm64
+          - config: ios_sim_arm64
+            artifact_name: tflite-runtime-ios-sim-arm64
           - config: ios_x86_64
-            artifact_name: tflite-runtime-ios-x86_64
+            artifact_name: tflite-runtime-ios-sim-x86_64
     steps:
       - uses: actions/checkout@v3
         with:
@@ -131,7 +132,7 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VER }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           pip install numpy
@@ -158,7 +159,6 @@ jobs:
           mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
           7z a "${{ matrix.artifact_name }}-${{ env.VERSION }}.zip" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
       - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
         with:
           files: "*.zip"
           tag_name: ${{ env.VERSION }}
@@ -183,7 +183,7 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VER }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install libegl1-mesa-dev
@@ -198,7 +198,6 @@ jobs:
           mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
           tar cfz "${{ matrix.artifact_name }}-${{ env.VERSION }}.tgz" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
       - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
         with:
           files: "*.tgz"
           tag_name: ${{ env.VERSION }}
@@ -225,7 +224,7 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VER }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           pip install numpy
@@ -245,11 +244,10 @@ jobs:
           tar cfz "${{ matrix.artifact_name }}-${{ env.VERSION }}.tgz" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}-${{ env.VERSION }}
+          name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}-${{ env.VERSION }}
           retention-days: 1
       - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
         with:
           files: "*.tgz"
           tag_name: ${{ env.VERSION }}
@@ -267,7 +265,6 @@ jobs:
           mv artifact/ "tflite-runtime-osx-universal2-${{ env.VERSION }}"
           tar cfz "tflite-runtime-osx-universal2-${{ env.VERSION }}.tgz" "tflite-runtime-osx-universal2-${{ env.VERSION }}"
       - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
         with:
           files: "*.tgz"
           tag_name: ${{ env.VERSION }}
@@ -293,7 +290,7 @@ jobs:
       - uses: bazelbuild/setup-bazelisk@v2
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VER }}
+          python-version: ${{ env.TF_PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           pip install numpy
@@ -309,7 +306,6 @@ jobs:
           mv artifact/ "${{ matrix.artifact_name }}-${{ env.VERSION }}"
           7z a "${{ matrix.artifact_name }}-${{ env.VERSION }}.zip" "${{ matrix.artifact_name }}-${{ env.VERSION }}"
       - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
         with:
           files: "*.zip"
           tag_name: ${{ env.VERSION }}
@@ -319,7 +315,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:  
       - uses: softprops/action-gh-release@v1
-        if: env.VERSION != 'DEBUG'
         with:
           name: TFLite Runtime v${{ env.VERSION }}
           tag_name: ${{ env.VERSION }}
