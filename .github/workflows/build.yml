@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Semantic version (e.g., 2.15.0)"
+        description: "Semantic version (e.g., 2.17.0)"
         required: true
       repository:
         description: "Name of a target repository"
@@ -21,7 +21,7 @@ env:
   TF_PYTHON_VERSION: '3.10'
   VERSION:
     |- # Enter release tag name or version in workflow_dispatch. Recent version if not specified
-    ${{ github.event.release.tag_name || github.event.inputs.version || '2.15.0' }}
+    ${{ github.event.release.tag_name || github.event.inputs.version || '2.17.0' }}
   REPOSITORY:
     ${{ github.event.inputs.repository || 'tensorflow/tensorflow' }}
   
