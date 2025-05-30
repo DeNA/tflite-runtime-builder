@@ -1,0 +1,97 @@
+name: Build TFLite runtime (Android only)
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version (e.g., 2.17.0)"
+        required: true
+      release:
+        description: "If true, release the artifact"
+        type: boolean
+        required: true
+      repository:
+        description: "Name of a target repository"
+        default: 'tensorflow/tensorflow'
+        required: false
+      clang_version:
+        description: "Clang version to use (e.g., 17)"
+        default: '17'
+        required: false
+      xnn_arm_options:
+        description: "XNNPack ARM options"
+        default: '--define=xnn_enable_arm_i8mm=false --define=xnn_enable_arm_bf16=false --define=xnn_enable_arm_dotprod=false'
+        required: false
+      xnn_avx_options:
+        description: "XNNPack AVX options"
+        default: '--define=xnn_enable_avx512amx=false --define=xnn_enable_avxvnniint8=false --define=xnn_enable_avxvnni=false --define=xnn_enable_avx512fp16=false'
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  VERSION:
+    |- # Enter release tag name or version in workflow_dispatch. Recent version if not specified
+    ${{ github.event.release.tag_name || github.event.inputs.version || '2.17.0' }}
+  REPOSITORY:
+    ${{ github.event.inputs.repository || 'tensorflow/tensorflow' }}
+
+jobs:
+  build-android:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: android_arm64
+            artifact_name: tflite-runtime-android-arm64
+    env:
+      ANDROID_SDK_API_LEVEL: 31
+      ANDROID_NDK_API_LEVEL: 26
+      ANDROID_BUILD_TOOLS_VERSION: '31.0.0'
+      CC: clang-${{ inputs.clang_version }}
+      CXX: clang++-${{ inputs.clang_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPOSITORY }}
+          ref: v${{ env.VERSION }}
+          submodules: recursive
+          github-server-url: https://github.com
+      - uses: bazel-contrib/setup-bazel@0.15.0
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r21b
+          add-to-path: true
+      - name: Install dependencies
+        run: |
+          sudo apt-get remove gcc g++
+          wget https://apt.llvm.org/llvm.sh
+          chmod u+x llvm.sh
+          sudo ./llvm.sh ${{ inputs.clang_version }}
+          sudo apt-get update
+          sudo apt-get install -y mesa-common-dev libegl1-mesa-dev libgles2-mesa-dev clang-${{ inputs.clang_version }} llvm-${{ inputs.clang_version }}
+      - name: Build shared libraries
+        if: ${{ matrix.config != 'android_fat_aar' }}
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          mkdir -p artifact
+          export ANDROID_SDK_HOME=$ANDROID_HOME
+
+          # Main
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 ${{ inputs.xnn_arm_options }} ${{ inputs.xnn_avx_options }} tensorflow/lite/c:tensorflowlite_c
+          cp -f bazel-bin/tensorflow/lite/c/libtensorflowlite_c.so artifact
+          
+          # GPU Delegate
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 ${{ inputs.xnn_arm_options }} ${{ inputs.xnn_avx_options }} --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_delegate.so
+          cp -f bazel-bin/tensorflow/lite/delegates/gpu/libtensorflowlite_gpu_delegate.so artifact
+
+          # GL Delegate
+          bazel build -c opt --config=${{ matrix.config }} --cxxopt=--std=c++17 ${{ inputs.xnn_arm_options }} ${{ inputs.xnn_avx_options }} --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always tensorflow/lite/delegates/gpu:libtensorflowlite_gpu_gl.so
+          cp -f bazel-bin/tensorflow/lite/delegates/gpu/libtensorflowlite_gpu_gl.so artifact
