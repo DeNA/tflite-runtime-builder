@@ -17,9 +17,13 @@ on:
         description: "Name of a target repository"
         default: 'tensorflow/tensorflow'
         required: false
+      ref:
+        description: "Git reference to build from (branch, tag, commit)"
+        default: 'master'
+        required: false
       xnn_options:
         description: "XNNPack build options"
-        default: '--define=xnn_enable_avx512amx=false --define=xnn_enable_avxvnniint8=false --define=xnn_enable_avxvnni=false --define=xnn_enable_avx512fp16=false'
+        default: '--define=xnn_enable_arm_i8mm=false --define=xnn_enable_arm_bf16=false --define=xnn_enable_avx512amx=false --define=xnn_enable_avxvnniint8=false --define=xnn_enable_avxvnni=false --define=xnn_enable_avx512fp16=false'
         required: false
 
 permissions:
@@ -58,7 +62,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
+          ref: ${{ inputs.ref }}
           submodules: recursive
           github-server-url: https://github.com
       - uses: bazel-contrib/setup-bazel@0.15.0
@@ -141,7 +145,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
+          ref: ${{ inputs.ref }}
           submodules: recursive
           github-server-url: https://github.com
       - uses: bazel-contrib/setup-bazel@0.15.0
@@ -191,7 +195,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
+          ref: ${{ inputs.ref }}
           submodules: recursive
           github-server-url: https://github.com
       - uses: bazel-contrib/setup-bazel@0.15.0
@@ -235,7 +239,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
+          ref: ${{ inputs.ref }}
           submodules: recursive
           github-server-url: https://github.com
       - uses: bazel-contrib/setup-bazel@0.15.0
@@ -308,7 +312,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.REPOSITORY }}
-          ref: v${{ env.VERSION }}
+          ref: ${{ inputs.ref }}
           submodules: recursive
           github-server-url: https://github.com
       - uses: bazel-contrib/setup-bazel@0.15.0
@@ -336,6 +340,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         if: ${{ inputs.release }}
         with:
-          name: TFLite Runtime v${{ env.VERSION }}
+          name: TFLite Runtime ${{ inputs.ref }}
           tag_name: ${{ env.VERSION }}
           target_commitish: ${{ github.sha }}
