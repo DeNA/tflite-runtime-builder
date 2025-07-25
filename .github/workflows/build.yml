@@ -296,9 +296,7 @@ jobs:
           tag_name: ${{ env.VERSION }}
 
   build-windows:
-    # Using windows-2019 as build is broken on windows-latest runner due to another
-    # See: https://github.com/bazelbuild/bazel/issues/18592  
-    runs-on: windows-2019
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
